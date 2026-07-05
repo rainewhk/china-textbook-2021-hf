@@ -1,95 +1,100 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-#[derive(Default)]
-struct PdfSource {
-    full_file: Option<PathBuf>,
-    direct_parts: Vec<PathBuf>,
-    folder_parts: Vec<PathBuf>,
-}
-
 fn main() -> io::Result<()> {
-    let origin = Path::new("origin");
     let data = Path::new("data");
 
-    if data.exists() {
-        fs::remove_dir_all(data)?;
+    if !data.exists() {
+        eprintln!("error: 'data' directory does not exist");
+        std::process::exit(1);
     }
 
-    let mut targets: BTreeMap<PathBuf, PdfSource> = BTreeMap::new();
-    collect_files(origin, origin, &mut targets)?;
+    let mut targets: BTreeMap<PathBuf, Parts> = BTreeMap::new();
+    let mut folders_to_remove: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut parts_to_remove: BTreeSet<PathBuf> = BTreeSet::new();
 
-    for (rel_path, source) in targets {
-        let dest = data.join(&rel_path);
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)?;
+    // 第一轮扫描：构建目标映射
+    scan_targets(data, data, &mut targets, &mut folders_to_remove, &mut parts_to_remove)?;
+
+    // 处理合并
+    for (target_rel, parts) in targets {
+        let target_path = data.join(&target_rel);
+
+        if parts.has_full_file {
+            // 已有完整文件，什么都不做，残留在 targets 中的分片百事典在 loop 外清理
+            println!("SKIP  {} (already complete)", target_rel.display());
+        } else if !parts.folder_parts.is_empty() {
+            println!("MERGE folder -> {}", target_rel.display());
+            merge_parts(&parts.folder_parts, &target_path)?;
+        } else if !parts.direct_parts.is_empty() {
+            println!("MERGE direct -> {}", target_rel.display());
+            merge_parts(&parts.direct_parts, &target_path)?;
         }
+    }
 
-        if let Some(full) = source.full_file {
-            fs::copy(&full, &dest)?;
-            eprintln!("COPY  {}", rel_path.display());
-        } else if !source.folder_parts.is_empty() {
-            let mut parts = source.folder_parts;
-            sort_parts(&mut parts);
-            merge_parts(&parts, &dest)?;
-            eprintln!(
-                "MERGE folder {} ({} parts)",
-                rel_path.display(),
-                parts.len()
-            );
-        } else if !source.direct_parts.is_empty() {
-            let mut parts = source.direct_parts;
-            sort_parts(&mut parts);
-            merge_parts(&parts, &dest)?;
-            eprintln!(
-                "MERGE direct {} ({} parts)",
-                rel_path.display(),
-                parts.len()
-            );
+    // 删除所有 _merge_folder 目录
+    for folder in folders_to_remove {
+        if folder.exists() {
+            fs::remove_dir_all(&folder)?;
+            println!("REMOVED dir  {}", folder.display());
+        }
+    }
+
+    // 删除所有直接分包文件
+    for part_path in parts_to_remove {
+        if part_path.exists() {
+            fs::remove_file(&part_path)?;
+            println!("REMOVED part {}", part_path.display());
         }
     }
 
     Ok(())
 }
 
+#[derive(Default, Clone)]
+struct Parts {
+    has_full_file: bool,
+    folder_parts: Vec<PathBuf>,
+    direct_parts: Vec<PathBuf>,
+}
+
 fn sort_parts(parts: &mut [PathBuf]) {
     parts.sort_by(|a, b| {
-        let a_name = a.file_name().unwrap_or_default().to_string_lossy();
-        let b_name = b.file_name().unwrap_or_default().to_string_lossy();
-        let a_num = a_name
-            .rsplitn(2, '.')
-            .next()
-            .unwrap_or("0")
-            .parse::<u32>()
-            .unwrap_or(0);
-        let b_num = b_name
-            .rsplitn(2, '.')
-            .next()
-            .unwrap_or("0")
-            .parse::<u32>()
-            .unwrap_or(0);
-        a_num.cmp(&b_num)
+        fn extract_num(p: &Path) -> u32 {
+            p.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .rsplitn(2, '.')
+                .next()
+                .unwrap_or("0")
+                .parse::<u32>()
+                .unwrap_or(0)
+        }
+        extract_num(a).cmp(&extract_num(b))
     });
 }
 
 fn merge_parts(parts: &[PathBuf], dest: &Path) -> io::Result<()> {
     let mut out = fs::File::create(dest)?;
-    for part in parts {
+    let mut sorted_parts = parts.to_vec();
+    sort_parts(&mut sorted_parts);
+    for part in &sorted_parts {
         let mut file = fs::File::open(part)?;
         io::copy(&mut file, &mut out)?;
     }
     Ok(())
 }
 
-fn collect_files(
+fn scan_targets(
+    root: &Path,
     dir: &Path,
-    origin_root: &Path,
-    targets: &mut BTreeMap<PathBuf, PdfSource>,
+    targets: &mut BTreeMap<PathBuf, Parts>,
+    folders_to_remove: &mut BTreeSet<PathBuf>,
+    parts_to_remove: &mut BTreeSet<PathBuf>,
 ) -> io::Result<()> {
-    let rd = fs::read_dir(dir)?;
-    for entry in rd {
+    for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         let name = entry.file_name();
@@ -99,11 +104,12 @@ fn collect_files(
             if name_str.ends_with("_merge_folder") {
                 let base_len = name_str.len() - "_merge_folder".len();
                 let base_name = &name_str[..base_len];
-                let parent_dir = path.parent().unwrap_or(Path::new(""));
-                let rel_parent = parent_dir.strip_prefix(origin_root).unwrap_or(parent_dir);
-                let target_rel = rel_parent.join(base_name);
 
-                let mut parts = vec![];
+                let parent_dir = path.parent().unwrap_or(Path::new(""));
+                let target_rel = parent_dir.strip_prefix(root).unwrap_or(parent_dir);
+                let target_rel = target_rel.join(base_name);
+
+                let mut parts = Vec::new();
                 for part_entry in fs::read_dir(&path)? {
                     let part_entry = part_entry?;
                     let part_path = part_entry.path();
@@ -113,32 +119,39 @@ fn collect_files(
                     let part_name = part_entry.file_name();
                     let part_name_str = part_name.to_string_lossy();
                     if let Some(suffix) = part_name_str.strip_prefix(base_name) {
-                        if suffix.len() > 1 && suffix.starts_with('.') {
-                            if suffix[1..].parse::<u32>().is_ok() {
-                                parts.push(part_path);
-                            }
+                        if suffix.starts_with('.') && suffix[1..].parse::<u32>().is_ok() {
+                            parts.push(part_path);
                         }
                     }
                 }
-                let source = targets.entry(target_rel).or_default();
-                source.folder_parts = parts;
+
+                if !parts.is_empty() {
+                    let entry = targets.entry(target_rel).or_default();
+                    if entry.folder_parts.is_empty() {
+                        entry.folder_parts = parts;
+                    }
+                }
+                folders_to_remove.insert(path.clone());
             } else {
-                collect_files(&path, origin_root, targets)?;
+                scan_targets(root, &path, targets, folders_to_remove, parts_to_remove)?;
             }
         } else {
             let file_name = name_str;
-
             if file_name.ends_with(".pdf") && !file_name.contains(".pdf.") {
-                let rel_path = path.strip_prefix(origin_root).unwrap_or(&path).to_path_buf();
-                let source = targets.entry(rel_path).or_default();
-                source.full_file = Some(path.clone());
+                // 这是合并后的目标文件
+                let rel = path.strip_prefix(root).unwrap_or(&path);
+                let entry = targets.entry(rel.to_path_buf()).or_default();
+                entry.has_full_file = true;
             } else if file_name.contains(".pdf.") {
+                // 这是直接分包文件
                 if let Some(base) = file_name.rsplitn(2, '.').nth(1) {
                     let parent_dir = path.parent().unwrap_or(Path::new(""));
-                    let rel_parent = parent_dir.strip_prefix(origin_root).unwrap_or(parent_dir);
-                    let target_rel = rel_parent.join(base);
-                    let source = targets.entry(target_rel).or_default();
-                    source.direct_parts.push(path.clone());
+                    let target_rel = parent_dir.strip_prefix(root).unwrap_or(parent_dir);
+                    let target_rel = target_rel.join(base);
+
+                    let entry = targets.entry(target_rel).or_default();
+                    entry.direct_parts.push(path.clone());
+                    parts_to_remove.insert(path.clone());
                 }
             }
         }

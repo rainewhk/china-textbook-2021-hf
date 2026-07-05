@@ -1,6 +1,7 @@
 name: CI/CD Pipeline
 
 on:
+  push:
   workflow_dispatch:
 
 permissions:
@@ -20,7 +21,7 @@ jobs:
         with:
           repository: pubuyun/ChinaTextbook
           ref: 65054ef0e8323e772dc99e6eddba9715672d0f91
-          path: origin
+          path: data
           fetch-depth: 1
           sparse-checkout: |
             小学
@@ -39,8 +40,8 @@ jobs:
           rustc -O main.rs -o process-pdfs
           ./process-pdfs
       - name: Display output directory tree
-        run: tree -I '.git|origin' --dirsfirst data
-      # - name: Upload checkpoint
-      #   env:
-      #     HF_OIDC_RESOURCE: datasets/RainPPR/china-textbook-2021-hf
-      #   run: hf upload datasets/RainPPR/china-textbook-2021-hf ./data . --commit-message "Publish from ${GITHUB_SHA::7}"
+        run: tree -I '.git' --dirsfirst data
+      - name: Upload to Hugging Face
+        env:
+          HF_OIDC_RESOURCE: datasets/RainPPR/china-textbook-2021-hf
+        run: hf upload datasets/RainPPR/china-textbook-2021-hf ./data . --commit-message "Publish from ${GITHUB_SHA::7}"

@@ -16,6 +16,14 @@ jobs:
     steps:
       - name: Checkout project repository
         uses: actions/checkout@v7
+      - name: Install the hf CLI
+        run: |
+          curl -LsSf https://hf.co/cli/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build PDF merger
+        run: rustc -O main.rs -o process-pdfs
       - name: Checkout upstream textbook data
         uses: actions/checkout@v7
         with:
@@ -29,18 +37,8 @@ jobs:
             初中
             初中（五•四学制）
             高中
-      - name: Install the hf CLI
-        run: |
-          curl -LsSf https://hf.co/cli/install.sh | bash
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      - name: Build and run PDF merger
-        run: |
-          rustc -O main.rs -o process-pdfs
-          ./process-pdfs
-      - name: Display output directory tree
-        run: tree -I '.git' --dirsfirst data
+      - name: Run PDF merger
+        run: ./process-pdfs
       - name: Upload to Hugging Face
         env:
           HF_OIDC_RESOURCE: datasets/RainPPR/china-textbook-2021-hf

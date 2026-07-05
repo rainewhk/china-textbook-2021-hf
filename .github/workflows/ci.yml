@@ -9,14 +9,11 @@ permissions:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # required so the job can request an OIDC token from GitHub
+      contents: read
     steps:
-      - uses: dev-hato/actions-workflow-metrics@v0.0.7
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-      - run: uv sync --locked
-      - run: sudo apt-get install -y tree
       - uses: actions/checkout@v7
         with:
           repository: pubuyun/ChinaTextbook
@@ -29,10 +26,14 @@ jobs:
             初中
             初中（五•四学制）
             高中
-      - run: tree -I '.venv|.git' --dirsfirst
-      - run: uv run main.py
-        env:
-          PYTHONUNBUFFERED: 1
-          PYTHONUTF8: 1
-      - run: tree -I '.venv|.git' --dirsfirst
-      # 在这里用 secret 中的 API 上传到 Huggingface
+      - name: Install the hf CLI
+        run: |
+          curl -LsSf https://hf.co/cli/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - uses: dtolnay/rust-toolchain@stable
+      # 在这里写 rust 操作
+      - run: tree -I '.git' --dirsfirst
+      # - name: Upload checkpoint
+      #   env:
+      #     HF_OIDC_RESOURCE: datasets/RainPPR/china-textbook-2021-hf
+      #   run: hf upload datasets/RainPPR/china-textbook-2021-hf ./data . --commit-message "Publish from ${GITHUB_SHA::7}"

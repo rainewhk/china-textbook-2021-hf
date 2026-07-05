@@ -1,0 +1,36 @@
+name: CI/CD Pipeline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: dev-hato/actions-workflow-metrics@v0.0.7
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: pubuyun/ChinaTextbook
+          ref: 65054ef0e8323e772dc99e6eddba9715672d0f91
+          path: origin
+          sparse-checkout: |
+            小学
+            小学（五•四学制）
+            初中
+            初中（五•四学制）
+            高中
+          lfs: true
+          submodules: true
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: |
+          sudo apt-get install -y tree
+          tree -I '.venv|.git' --dirsfirst
+      - run: uv run main.py
+      # 在这里用 secret 中的 API 上传到 Huggingface

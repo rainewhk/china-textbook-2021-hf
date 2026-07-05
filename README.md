@@ -9,6 +9,8 @@
 
 本项目从 GitHub 上游拉取教育部审定的中小学教科书 PDF，自动合并碎片化文件，并托管到 [Hugging Face Datasets](https://huggingface.co/datasets/RainPPR/china-textbook-2021-hf)。
 
+本项目从 <https://github.com/TapXWorld/ChinaTextbook/pull/204> 构建，即 <https://github.com/pubuyun/ChinaTextbook/tree/65054ef0e8323e772dc99e6eddba9715672d0f91>，因为其更新了一个不好的 PDF，经本人验证该分支无误。
+
 ## 技术方案
 
 ### Rust 合并器 (`main.rs`)

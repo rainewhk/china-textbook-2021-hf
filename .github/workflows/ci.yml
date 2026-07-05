@@ -13,8 +13,10 @@ jobs:
       id-token: write  # required so the job can request an OIDC token from GitHub
       contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
+      - name: Checkout project repository
+        uses: actions/checkout@v7
+      - name: Checkout upstream textbook data
+        uses: actions/checkout@v7
         with:
           repository: pubuyun/ChinaTextbook
           ref: 65054ef0e8323e772dc99e6eddba9715672d0f91
@@ -30,9 +32,14 @@ jobs:
         run: |
           curl -LsSf https://hf.co/cli/install.sh | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - uses: dtolnay/rust-toolchain@stable
-      # 在这里写 rust 操作
-      - run: tree -I '.git' --dirsfirst
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build and run PDF merger
+        run: |
+          rustc -O main.rs -o process-pdfs
+          ./process-pdfs
+      - name: Display output directory tree
+        run: tree -I '.git|origin' --dirsfirst data
       # - name: Upload checkpoint
       #   env:
       #     HF_OIDC_RESOURCE: datasets/RainPPR/china-textbook-2021-hf

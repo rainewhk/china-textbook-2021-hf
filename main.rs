@@ -57,9 +57,9 @@ fn process_dir(dir: &Path) -> io::Result<()> {
         }
     }
 
-    // 排序：按完整路径字符串排序（与 Go 的 sort.Strings 一致）
+    // 排序：按末尾数字排序（.1 < .2 < .10 < .11）
     for parts in direct_parts.values_mut() {
-        parts.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+        parts.sort_by(|a, b| part_num(a).cmp(&part_num(b)));
     }
 
     // 合并处理当前目录的所有目标
@@ -172,9 +172,20 @@ fn collect_parts_from_folder(folder: &Path, base_name: &str) -> io::Result<Vec<P
             }
         }
     }
-    // 按完整路径字符串排序（与 Go 的 sort.Strings 一致）
-    parts.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+    // 按末尾数字排序：.1 < .2 < .10 < .11
+    parts.sort_by(|a, b| part_num(a).cmp(&part_num(b)));
     Ok(parts)
+}
+
+fn part_num(p: &Path) -> u32 {
+    p.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .rsplitn(2, '.')
+        .next()
+        .unwrap_or("0")
+        .parse::<u32>()
+        .unwrap_or(0)
 }
 
 fn merge_parts(parts: &[PathBuf], dest: &Path) -> io::Result<()> {

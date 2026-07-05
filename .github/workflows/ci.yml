@@ -12,25 +12,27 @@ jobs:
     steps:
       - uses: dev-hato/actions-workflow-metrics@v0.0.7
       - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: sudo apt-get install -y tree
       - uses: actions/checkout@v7
         with:
           repository: pubuyun/ChinaTextbook
           ref: 65054ef0e8323e772dc99e6eddba9715672d0f91
           path: origin
+          fetch-depth: 1
           sparse-checkout: |
             小学
             小学（五•四学制）
             初中
             初中（五•四学制）
             高中
-          lfs: true
-          submodules: true
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-      - run: uv sync --locked
-      - run: |
-          sudo apt-get install -y tree
-          tree -I '.venv|.git' --dirsfirst
+      - run: tree -I '.venv|.git' --dirsfirst
       - run: uv run main.py
+        env:
+          PYTHONUNBUFFERED: 1
+          PYTHONUTF8: 1
+      - run: tree -I '.venv|.git' --dirsfirst
       # 在这里用 secret 中的 API 上传到 Huggingface

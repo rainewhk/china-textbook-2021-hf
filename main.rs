@@ -10,6 +10,11 @@ fn main() -> io::Result<()> {
         std::process::exit(1);
     }
     process_dir(data)?;
+
+    if let Ok(content) = fs::read_to_string("DATASET_CARD.md") {
+        fs::write(data.join("README.md"), content)?;
+    }
+
     Ok(())
 }
 
@@ -19,7 +24,7 @@ fn process_dir(dir: &Path) -> io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() && !path.file_name().unwrap_or_default().to_string_lossy().ends_with("_merge_folder") {
+        if path.is_dir() && !is_merge_folder(&path) {
             subdirs.push(path);
         }
     }
@@ -27,7 +32,7 @@ fn process_dir(dir: &Path) -> io::Result<()> {
         process_dir(&subdir)?;
     }
 
-    // 扫描当前目录（排除 _merge_folder，稍后统一处理）
+    // 扫描当前目录
     let mut full_files: HashSet<String> = HashSet::new();
     let mut direct_parts: HashMap<String, Vec<PathBuf>> = HashMap::new();
     let mut merge_folders: HashMap<String, PathBuf> = HashMap::new();
@@ -45,10 +50,16 @@ fn process_dir(dir: &Path) -> io::Result<()> {
         } else if name_str.ends_with(".pdf") && !name_str.contains(".pdf.") {
             full_files.insert(name_str.to_string());
         } else if name_str.contains(".pdf.") {
-            if let Some(base) = name_str.rsplitn(2, '.').nth(1) {
-                direct_parts.entry(base.to_string()).or_default().push(path.clone());
-            }
+            // 与 Go 代码一致：strings.Split(fileName, ".pdf.")[0] + ".pdf"
+            let base = name_str.split(".pdf.").next().unwrap_or(&name_str);
+            let base_name = format!("{}.pdf", base);
+            direct_parts.entry(base_name).or_default().push(path.clone());
         }
+    }
+
+    // 排序：按完整路径字符串排序（与 Go 的 sort.Strings 一致）
+    for parts in direct_parts.values_mut() {
+        parts.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
     }
 
     // 合并处理当前目录的所有目标
@@ -59,21 +70,18 @@ fn process_dir(dir: &Path) -> io::Result<()> {
 
     for target_name in all_targets {
         let has_full = full_files.contains(&target_name);
-        let has_folder = merge_folders.contains_key(&target_name);
 
         if has_full {
             // 有完整文件：删除所有分片和 merge_folder
             if let Some(folder) = merge_folders.get(&target_name) {
                 if folder.exists() {
-                    fs::remove_dir_all(folder)?;
-                    println!("REMOVED dir (has full)   {}", folder.display());
+                    let _ = fs::remove_dir_all(folder);
                 }
             }
             if let Some(parts) = direct_parts.get(&target_name) {
                 for part in parts {
                     if part.exists() {
-                        fs::remove_file(part)?;
-                        println!("REMOVED part (has full)  {}", part.display());
+                        let _ = fs::remove_file(part);
                     }
                 }
             }
@@ -81,44 +89,71 @@ fn process_dir(dir: &Path) -> io::Result<()> {
             // 用 folder 合并，然后删除
             let parts = collect_parts_from_folder(folder, &target_name)?;
             let dest = dir.join(&target_name);
+
             if !parts.is_empty() {
+                print_merge_log("MERGE folder", &dest, &parts);
                 merge_parts(&parts, &dest)?;
-                println!("MERGE folder -> {}", dest.display());
-                // 逐个删除已合并的分片（实时释放）
                 for part in &parts {
                     if part.exists() {
-                        fs::remove_file(part)?;
+                        let _ = fs::remove_file(part);
                     }
                 }
             }
             if folder.exists() {
-                fs::remove_dir_all(folder)?;
-                println!("REMOVED dir              {}", folder.display());
+                let _ = fs::remove_dir_all(folder);
             }
-            // 同时清理直接分片（如果有，但通常不会有）
-            if let Some(parts) = direct_parts.get(&target_name) {
-                for part in parts {
+            // 同时清理直接分片（如果有）
+            if let Some(dparts) = direct_parts.get(&target_name) {
+                for part in dparts {
                     if part.exists() {
-                        fs::remove_file(part)?;
-                        println!("REMOVED part (dup)       {}", part.display());
+                        let _ = fs::remove_file(part);
                     }
                 }
             }
         } else if let Some(parts) = direct_parts.get(&target_name) {
             // 用直接分片合并
             let dest = dir.join(&target_name);
+
+            print_merge_log("MERGE direct", &dest, parts);
             merge_parts(parts, &dest)?;
-            println!("MERGE direct -> {}", dest.display());
             for part in parts {
                 if part.exists() {
-                    fs::remove_file(part)?;
-                    println!("REMOVED part             {}", part.display());
+                    let _ = fs::remove_file(part);
                 }
             }
         }
     }
 
+    // 删除所有非 .pdf 文件
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            // 保留以 .pdf 结尾的完整文件，删除其他所有文件（包括残留的分片、非 PDF 文件等）
+            if !name_str.ends_with(".pdf") || name_str.contains(".pdf.") {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+
     Ok(())
+}
+
+fn is_merge_folder(path: &Path) -> bool {
+    path.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .ends_with("_merge_folder")
+}
+
+fn print_merge_log(label: &str, dest: &Path, parts: &[PathBuf]) {
+    let names: Vec<String> = parts
+        .iter()
+        .map(|p| p.file_name().unwrap_or_default().to_string_lossy().into_owned())
+        .collect();
+    println!("{} -> {} [{}]", label, dest.display(), names.join(" -> "));
 }
 
 fn collect_parts_from_folder(folder: &Path, base_name: &str) -> io::Result<Vec<PathBuf>> {
@@ -137,20 +172,8 @@ fn collect_parts_from_folder(folder: &Path, base_name: &str) -> io::Result<Vec<P
             }
         }
     }
-    // 按末尾数字排序：.1 < .2 < .10
-    parts.sort_by(|a, b| {
-        fn extract_num(p: &Path) -> u32 {
-            p.file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .rsplitn(2, '.')
-                .next()
-                .unwrap_or("0")
-                .parse::<u32>()
-                .unwrap_or(0)
-        }
-        extract_num(a).cmp(&extract_num(b))
-    });
+    // 按完整路径字符串排序（与 Go 的 sort.Strings 一致）
+    parts.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
     Ok(parts)
 }
 

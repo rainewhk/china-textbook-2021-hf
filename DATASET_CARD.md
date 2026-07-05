@@ -1,9 +1,6 @@
 ---
 language:
   - zh
-license: unknown
-size_categories:
-  - 10GB<n<100GB
 ---
 
 # China Textbook 2021
